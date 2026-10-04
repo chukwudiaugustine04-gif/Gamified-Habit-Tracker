@@ -1,0 +1,31 @@
+{
+  "name": "Daywell Habit Tracker",
+  "short_name": "Daywell",
+  "description": "A personal home for your daily rhythm, growing balance, and small wins.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "launch_handler": {
+    "client_mode": "navigate-existing"
+  },
+  "handle_links": "preferred",
+  "orientation": "any",
+  "background_color": "#f5f4ed",
+  "theme_color": "#397b5d",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/daywell-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/daywell-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

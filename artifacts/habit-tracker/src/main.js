@@ -1,4 +1,5 @@
 const STORE_KEY = 'daywell-data-v1';
+const REMINDER_GRACE_MS = 60_000;
 const milestones = [
   { points: 20, name: 'Bronze', symbol: 'B' },
   { points: 50, name: 'Silver', symbol: 'S' },
@@ -16,9 +17,9 @@ function localDayKey(date = new Date()) {
 }
 function blankData() {
   return {
-    tasks: [], balance: 0, badges: [], theme: 'light',
+    tasks: [], balance: 0, badges: [], theme: 'light', notificationsEnabled: false,
     avatar: { type: 'builtin', value: 'leaf' },
-    today: { date: localDayKey(), statuses: {}, earned: 0, missed: 0 },
+    today: { date: localDayKey(), statuses: {}, earned: 0, missed: 0, remindersSent: [] },
   };
 }
 function loadData() {
@@ -29,12 +30,16 @@ function loadData() {
     return {
       ...defaults, ...saved,
       balance: Math.max(0, Number(saved.balance) || 0),
+      notificationsEnabled: Boolean(saved.notificationsEnabled),
       tasks: saved.tasks.map((task, index) => ({ ...task, id: task.id || `task-${index}-${Date.now()}` })),
       badges: Array.isArray(saved.badges) ? saved.badges : [],
       avatar: saved.avatar || defaults.avatar,
       today: saved.today && saved.today.date === localDayKey()
-        ? { statuses: {}, earned: 0, missed: 0, ...saved.today }
-        : { date: localDayKey(), statuses: {}, earned: 0, missed: 0 },
+        ? {
+          statuses: {}, earned: 0, missed: 0, remindersSent: [], ...saved.today,
+          remindersSent: Array.isArray(saved.today.remindersSent) ? saved.today.remindersSent : [],
+        }
+        : { date: localDayKey(), statuses: {}, earned: 0, missed: 0, remindersSent: [] },
     };
   } catch {
     return blankData();
@@ -43,6 +48,7 @@ function loadData() {
 let data = loadData();
 let activeView = 'goals';
 let toastTimer;
+let deferredInstallPrompt = null;
 
 function persist() {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(data)); }
@@ -67,7 +73,7 @@ function displayDate(date = new Date()) {
 }
 function rollDateIfNeeded() {
   const today = localDayKey();
-  if (data.today.date !== today) data.today = { date: today, statuses: {}, earned: 0, missed: 0 };
+  if (data.today.date !== today) data.today = { date: today, statuses: {}, earned: 0, missed: 0, remindersSent: [] };
 }
 function checkExpiredTasks() {
   const before = data.balance;
@@ -104,6 +110,176 @@ function showToast(message) {
   toast.classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove('show'), 2900);
+}
+function renderNotificationSetup() {
+  const title = document.querySelector('#notification-title');
+  const copy = document.querySelector('#notification-copy');
+  const button = document.querySelector('#notification-permission');
+  if (!title || !copy || !button) return;
+
+  if (!('Notification' in window)) {
+    title.textContent = 'Reminders are not available here';
+    copy.textContent = 'This browser does not support task notifications. Your scheduled goals will still appear in Daywell.';
+    button.hidden = true;
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    title.textContent = 'Notifications are blocked';
+    copy.textContent = 'Allow notifications for this site in your browser settings to turn on task reminders.';
+    button.hidden = true;
+    return;
+  }
+
+  button.hidden = false;
+  const enabled = data.notificationsEnabled && Notification.permission === 'granted';
+  title.textContent = enabled ? 'Task reminders are on' : 'A gentle reminder, right on time';
+  copy.textContent = enabled
+    ? 'Start and end reminders appear while Daywell is open. Your browser may pause them if the app or device is asleep.'
+    : 'Allow browser notifications for task start and end times. You can turn reminders off here anytime.';
+  button.textContent = enabled ? 'Turn off reminders' : 'Enable reminders';
+  button.dataset.enabled = String(enabled);
+}
+async function requestTaskNotifications() {
+  if (!('Notification' in window)) {
+    showToast('This browser does not support notifications.');
+    return;
+  }
+  if (data.notificationsEnabled && Notification.permission === 'granted') {
+    data.notificationsEnabled = false;
+    persist();
+    render();
+    showToast('Task reminders are off.');
+    return;
+  }
+  try {
+    const permission = Notification.permission === 'default'
+      ? await Notification.requestPermission()
+      : Notification.permission;
+    if (permission !== 'granted') {
+      render();
+      showToast(permission === 'denied'
+        ? 'Allow notifications in your browser settings to enable reminders.'
+        : 'Notification permission was not granted.');
+      return;
+    }
+    data.notificationsEnabled = true;
+    persist();
+    render();
+    showToast('Task reminders are on.');
+    checkScheduledNotifications();
+  } catch {
+    showToast('Your browser could not enable notifications. Check its site settings.');
+  }
+}
+async function deliverTaskNotification(task, phase, key) {
+  const isStart = phase === 'start';
+  const title = isStart ? `Time to start: ${task.name}!` : `Time's up for ${task.name}!`;
+  const body = isStart ? 'Your scheduled goal is ready.' : 'Mark it complete to earn points.';
+  const options = {
+    body,
+    icon: '/daywell-192.png',
+    badge: '/daywell-192.png',
+    tag: `daywell-${key}`,
+    renotify: false,
+    data: { url: '/' },
+  };
+  try {
+    if ('serviceWorker' in navigator) {
+      const registration = await navigator.serviceWorker.ready;
+      await registration.showNotification(title, options);
+    } else {
+      new Notification(title, options);
+    }
+  } catch {
+    showToast('A task reminder could not be shown. Check your browser notification settings.');
+  }
+}
+function checkScheduledNotifications() {
+  rollDateIfNeeded();
+  if (!data.notificationsEnabled || !('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!Array.isArray(data.today.remindersSent)) data.today.remindersSent = [];
+  const now = Date.now();
+  const today = localDayKey();
+  const sent = new Set(data.today.remindersSent);
+  let changed = false;
+  for (const task of data.tasks) {
+    const status = data.today.statuses[task.id];
+    for (const phase of ['start', 'end']) {
+      const key = `${today}:${task.id}:${phase}`;
+      if (sent.has(key)) continue;
+      const scheduledAt = taskDate(task[phase]).getTime();
+      if (now < scheduledAt) continue;
+      sent.add(key);
+      data.today.remindersSent.push(key);
+      changed = true;
+      if (!status && now - scheduledAt <= REMINDER_GRACE_MS) {
+        deliverTaskNotification(task, phase, key);
+      }
+    }
+  }
+  if (changed) persist();
+}
+function isStandaloneApp() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+function updateInstallButton() {
+  const button = document.querySelector('#install-app');
+  if (!button) return;
+  const installed = isStandaloneApp();
+  button.disabled = installed;
+  button.textContent = installed ? 'App Installed' : 'Install App';
+  button.setAttribute('aria-label', installed ? 'Daywell is installed' : 'Install Daywell as an app');
+}
+function registerAppShell() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+    showToast('Offline app support is unavailable in this browser.');
+  });
+}
+async function installApp() {
+  if (isStandaloneApp()) {
+    showToast('Daywell is already installed.');
+    return;
+  }
+  if (!deferredInstallPrompt) {
+    showToast('Use your browser menu and choose “Install app” or “Add to Home Screen”.');
+    return;
+  }
+  const promptEvent = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  try {
+    await promptEvent.prompt();
+    const choice = await promptEvent.userChoice;
+    showToast(choice.outcome === 'accepted'
+      ? 'Daywell is ready on your device.'
+      : 'You can install Daywell anytime from this button.');
+  } catch {
+    showToast('Your browser could not open the install prompt. Try its menu instead.');
+  } finally {
+    updateInstallButton();
+  }
+}
+function copyText(value) {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(value);
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('textarea');
+    input.value = value;
+    input.setAttribute('readonly', '');
+    input.className = 'copy-buffer';
+    document.body.append(input);
+    input.select();
+    const copied = document.execCommand('copy');
+    input.remove();
+    copied ? resolve() : reject(new Error('Clipboard access is unavailable.'));
+  });
+}
+function openFontModal() {
+  document.querySelector('#font-modal-backdrop').hidden = false;
+  document.querySelector('#close-font-modal').focus();
+}
+function closeFontModal() {
+  document.querySelector('#font-modal-backdrop').hidden = true;
+  document.querySelector('#font-button').focus();
 }
 function getTier(balance = data.balance) {
   if (balance >= 200) return { name: 'Valuables / Platinum', min: 200, next: null };
@@ -253,6 +429,8 @@ function render() {
   document.querySelector('#profile-name').textContent = 'Your space';
   document.querySelector('#profile-points').textContent = `${data.balance} points`;
   document.querySelectorAll('[data-theme-choice]').forEach((button) => button.setAttribute('aria-pressed', button.dataset.themeChoice === data.theme ? 'true' : 'false'));
+  renderNotificationSetup();
+  updateInstallButton();
   document.querySelectorAll('[data-avatar-choice]').forEach((button) => {
     const selected = data.avatar.type === 'builtin' && button.dataset.avatarChoice === data.avatar.value;
     button.classList.toggle('selected', selected);
@@ -284,7 +462,10 @@ document.querySelector('#app').innerHTML = `
     <main class="main">
       <header class="topbar">
         <div><div class="date-kicker" id="date-kicker"></div><h1 class="welcome">A gentler way to get<br class="mobile-break"> <em>things done.</em></h1></div>
-        <div class="profile"><div class="profile-label"><strong id="profile-name"></strong><small id="profile-points"></small></div>
+        <div class="header-controls">
+          <button type="button" class="btn secondary small font-button" id="font-button" data-action="open-fonts">Fonts</button>
+          <button type="button" class="btn install-btn small" id="install-app">Install App</button>
+          <div class="profile"><div class="profile-label"><strong id="profile-name"></strong><small id="profile-points"></small></div>
           <button type="button" class="avatar-trigger" id="profile-avatar" aria-label="Customize profile avatar" aria-expanded="false"></button>
           <section class="panel profile-panel" id="profile-panel" aria-label="Avatar settings" hidden>
             <h3>Your little portrait</h3><span class="eyebrow">Pick a color</span>
@@ -299,10 +480,15 @@ document.querySelector('#app').innerHTML = `
               <input class="upload-input" id="avatar-upload" type="file" accept="image/*">
             </label>
           </section>
+          </div>
         </div>
       </header>
       <section class="page-section" id="view-goals" aria-labelledby="goals-title">
         <div class="hero-row"><div><div class="eyebrow">One day, at your pace</div><h2 class="section-heading" id="goals-title">Today's rhythm</h2><p class="section-sub">A few small promises to yourself. Do the next one when its time arrives.</p></div><div class="date-stamp" id="today-date"></div></div>
+        <section class="notification-setup panel" id="notification-setup" aria-labelledby="notification-title">
+          <div class="notification-copy-block"><strong id="notification-title">A gentle reminder, right on time</strong><p id="notification-copy">Allow browser notifications for task start and end times.</p></div>
+          <button class="btn secondary small" id="notification-permission" type="button" data-action="toggle-notifications">Enable reminders</button>
+        </section>
         <div class="dashboard-grid">
           <article class="panel goals-panel"><div class="panel-head"><h3 class="panel-title">Your daily goals</h3><span class="tiny-tag"><i class="live-dot"></i> Follows your local time</span></div>
             <div id="task-content"></div><p class="rule-note"><strong>Gentle accountability:</strong> only your next goal can be completed. Complete it within its time window to earn its points. A missed window takes 5 points off, once only.</p>
@@ -337,6 +523,17 @@ document.querySelector('#app').innerHTML = `
         </div><p class="form-error" id="form-error" aria-live="polite"></p>
         <div class="modal-actions"><button class="btn ghost" type="button" data-action="close-modal">Not now</button><button class="btn" type="submit">Add to my day</button></div>
       </form>
+    </section>
+  </div>
+  <div class="modal-backdrop font-modal-backdrop" id="font-modal-backdrop" hidden>
+    <section class="modal font-modal" role="dialog" aria-modal="true" aria-labelledby="font-modal-title">
+      <div class="font-modal-heading"><div><div class="eyebrow">A closer look</div><h2 id="font-modal-title">Fonts in Daywell</h2></div><button class="btn ghost small" type="button" id="close-font-modal" data-action="close-fonts" aria-label="Close font preview">Close</button></div>
+      <p>Three typefaces give the dashboard its personality. Copy a complete CSS font declaration for use in your own project.</p>
+      <div class="font-list">
+        <article class="font-option"><div><span class="eyebrow">Headings</span><h3 class="font-sample-heading">Newsreader</h3><code>‘A little progress adds up.’</code><small>Fallbacks: Georgia, serif</small></div><button type="button" class="btn secondary small copy-font" data-copy-font="font-family: 'Newsreader', Georgia, serif;">Copy Font Family CSS</button></article>
+        <article class="font-option"><div><span class="eyebrow">Body text</span><h3 class="font-sample-body">Manrope</h3><code>A clear, friendly everyday rhythm.</code><small>Fallback: sans-serif</small></div><button type="button" class="btn secondary small copy-font" data-copy-font="font-family: 'Manrope', sans-serif;">Copy Font Family CSS</button></article>
+        <article class="font-option"><div><span class="eyebrow">UI labels</span><h3 class="font-sample-label">DM Mono</h3><code>08:00 AM · 10 POINTS</code><small>Fallback: monospace</small></div><button type="button" class="btn secondary small copy-font" data-copy-font="font-family: 'DM Mono', monospace;">Copy Font Family CSS</button></article>
+      </div>
     </section>
   </div>`;
 
@@ -420,6 +617,14 @@ function samplePlan() {
 }
 
 document.addEventListener('click', (event) => {
+  const fontCopyButton = event.target.closest('[data-copy-font]');
+  if (fontCopyButton) {
+    copyText(fontCopyButton.dataset.copyFont).then(
+      () => showToast('Font CSS copied.'),
+      () => showToast('Could not copy the font declaration.'),
+    );
+    return;
+  }
   const viewButton = event.target.closest('[data-view]');
   if (viewButton) { setView(viewButton.dataset.view); return; }
   const themeButton = event.target.closest('[data-theme-choice]');
@@ -436,12 +641,16 @@ document.addEventListener('click', (event) => {
     if (action === 'close-modal') closeTaskModal();
     if (action === 'complete-task') completeTask(actionButton.dataset.task);
     if (action === 'sample-plan') samplePlan();
+    if (action === 'toggle-notifications') requestTaskNotifications();
+    if (action === 'open-fonts') openFontModal();
+    if (action === 'close-fonts') closeFontModal();
   }
   if (!event.target.closest('#profile-panel') && !event.target.closest('#profile-avatar')) {
     document.querySelector('#profile-panel').hidden = true;
     document.querySelector('#profile-avatar').setAttribute('aria-expanded', 'false');
   }
   if (event.target.id === 'task-modal-backdrop') closeTaskModal();
+  if (event.target.id === 'font-modal-backdrop') closeFontModal();
 });
 
 document.querySelector('#task-form').addEventListener('submit', (event) => {
@@ -488,10 +697,42 @@ document.querySelector('#avatar-upload').addEventListener('change', (event) => {
   reader.readAsDataURL(file);
 });
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape') { closeTaskModal(); document.querySelector('#profile-panel').hidden = true; }
+  if (event.key === 'Escape') {
+    closeTaskModal();
+    if (!document.querySelector('#font-modal-backdrop').hidden) closeFontModal();
+    document.querySelector('#profile-panel').hidden = true;
+    document.querySelector('#profile-avatar').setAttribute('aria-expanded', 'false');
+  }
 });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) { checkExpiredTasks(); render(); } });
-window.addEventListener('focus', () => { checkExpiredTasks(); render(); });
-window.setInterval(() => { checkExpiredTasks(); render(); }, 15000);
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  updateInstallButton();
+});
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  updateInstallButton();
+  showToast('Daywell was installed on your device.');
+});
+document.querySelector('#install-app').addEventListener('click', installApp);
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    checkScheduledNotifications();
+    checkExpiredTasks();
+    render();
+  }
+});
+window.addEventListener('focus', () => {
+  checkScheduledNotifications();
+  checkExpiredTasks();
+  render();
+});
+window.setInterval(() => {
+  checkScheduledNotifications();
+  checkExpiredTasks();
+  render();
+}, 15000);
+registerAppShell();
+checkScheduledNotifications();
 checkExpiredTasks();
 render();
