@@ -1,0 +1,59 @@
+Build a complete architectural upgrade for the "Daywell" habit-tracking PWA based on the following comprehensive specification. Execute all steps sequentially and push the updated codebase directly to GitHub.
+
+---
+
+### PHASE 1: BRANDING & UI ENGINE
+1. Logo & Asset Integration:
+   - Update branding assets to a minimalist, modern corporate tech emblem: a geometric shield combined with an upward growth arrow and stylized rising sun in a solid vector format.
+   - Color Palette: Dark slate blue background (#0F172A), bronze accent (#D97706), deep graphite (#1E293B), and neutral crisp typography (#F8FAFC). No cartoon elements, pixel art, 3D gaming effects, or saturated colors.
+2. Customization System:
+   - Build a global Theme Engine supporting Light & Dark modes, with presets: Minimalist, Forest Calm, and Professional Slate.
+   - Create an Avatar System allowing users to select and unlock distinct profile avatars.
+   - Save theme and avatar state to both local storage and the user's backend profile for persistent cloud sync.
+
+---
+
+### PHASE 2: AUTHENTICATION & USER ACCESS (STRICT GATEKEEPER)
+1. Access Control: Block all access to the main dashboard until an authenticated user session is established.
+2. Registration & Sign-In Options:
+   - Email + Password
+   - Global Phone Number (with international dial code dropdown)
+   - Google OAuth (passport-google-oauth20 or Supabase Auth)
+3. 2-Step Verification (2FA / OTP):
+   - Upon registration via Email or Phone, send a 4-digit OTP code with a 5-minute expiration window.
+   - Email/SMS Body Template (Strict Syntax):
+     "Hi [User Name], your security code for Daywell is [Insert Code]. This code is valid for 5 minutes. As you continue building discipline and consistency, remember that every step counts. If you did not request this code, please ignore this email."
+   - Rate Limit: Enforce a strict 30-second cooldown on the frontend and backend before allowing a user to request a code resend.
+
+---
+
+### PHASE 3: BACKEND ARCHITECTURE & DATABASE SCHEMA
+1. Database Setup: Connect PostgreSQL / Supabase and migrate local habit storage to remote relational tables:
+   - users: id, name, email, phone, auth_provider, theme_preference, avatar_id, created_at
+   - habits: id, user_id, title, frequency, created_at
+   - habit_logs: id, habit_id, user_id, completed_at, status
+   - otp_tokens: id, user_identifier, code, expires_at
+2. Sync Layer: Implement API endpoints (/api/habits, /api/user/preferences, /api/analytics) so all user data automatically syncs across sessions and multiple devices.
+
+---
+
+### PHASE 4: ANALYTICS & HISTORY DASHBOARD
+Create a dedicated "Performance & Analytics" tab containing:
+1. Habit Completion Log: Full historical breakdown with filter options (daily, weekly, monthly).
+2. Metrics Display: Completion percentage rate, current streak count, and all-time best streak.
+3. Interactive Visualizations: Progress heatmaps or calendar-based completion grids.
+
+---
+
+### PHASE 5: HARDWARE & CALENDAR INTEGRATIONS
+1. Calendar Sync:
+   - Add a settings feature allowing users to export habit schedules via .ics file downloads or sync directly with Google/Apple/Outlook Calendars.
+2. Wearable Device Connectivity:
+   - Build a "Connected Devices" interface using the native Browser Web Bluetooth API (navigator.bluetooth) to scan, pair, and receive signals from compatible health/fitness wearables or smart sensors.
+
+---
+
+### EXECUTION REQUIREMENTS
+- Run full build and unit checks locally using npm run build or pnpm run build to verify zero compile or path errors.
+- Ensure vercel.json and vite.config.ts remain correctly configured for Vercel static output deployment.
+- Commit all code and push directly to the main branch on GitHub when finished.
