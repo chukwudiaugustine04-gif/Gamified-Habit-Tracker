@@ -1,0 +1,1 @@
+- [Vercel build defaults](vercel-build-defaults.md) — static builds must work without `PORT` or `BASE_PATH`, while honoring explicit overrides.
