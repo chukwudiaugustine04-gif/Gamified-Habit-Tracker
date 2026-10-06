@@ -2,14 +2,20 @@ openapi: 3.1.0
 info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
-  version: 0.1.0
-  description: API specification
+  version: 0.2.0
+  description: Daywell habit tracking and analytics API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: habits
+    description: Habit schedules and completion history
+  - name: profile
+    description: User preferences and avatars
+  - name: analytics
+    description: Habit performance summaries
 paths:
   /healthz:
     get:
@@ -24,7 +30,274 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /habits:
+    get:
+      operationId: listHabits
+      tags: [habits]
+      summary: List the authenticated user's habits
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Habit schedules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Habit"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: createHabit
+      tags: [habits]
+      summary: Create a habit schedule
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HabitInput"
+      responses:
+        "201":
+          description: Habit created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Habit"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /habits/{habitId}:
+    patch:
+      operationId: updateHabit
+      tags: [habits]
+      summary: Update a habit schedule
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/HabitId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HabitUpdate"
+      responses:
+        "200":
+          description: Updated habit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Habit"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteHabit
+      tags: [habits]
+      summary: Delete a habit and its history
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/HabitId"
+      responses:
+        "204":
+          description: Habit deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /habits/{habitId}/logs/{date}:
+    put:
+      operationId: upsertHabitLog
+      tags: [habits]
+      summary: Set a habit's status for a calendar day
+      description: Idempotently creates or updates one daily completion record.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/HabitId"
+        - name: date
+          in: path
+          required: true
+          schema:
+            type: string
+            format: date
+            pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HabitLogInput"
+      responses:
+        "200":
+          description: Saved habit log
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HabitLog"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /habits/import:
+    post:
+      operationId: importLegacyHabits
+      tags: [habits]
+      summary: Import habits and today's progress from the legacy Daywell PWA
+      description: Safe to retry; legacy identifiers prevent duplicate imports.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LegacyImportInput"
+      responses:
+        "200":
+          description: Import completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LegacyImportResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /user/preferences:
+    get:
+      operationId: getUserPreferences
+      tags: [profile]
+      summary: Get the authenticated user's saved preferences
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPreferences"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    put:
+      operationId: updateUserPreferences
+      tags: [profile]
+      summary: Update theme or avatar preferences
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPreferencesUpdate"
+      responses:
+        "200":
+          description: Saved preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPreferences"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /avatars:
+    get:
+      operationId: listAvatars
+      tags: [profile]
+      summary: List selectable avatars and unlock progress
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Avatar catalog for the authenticated user
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Avatar"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /analytics:
+    get:
+      operationId: getAnalytics
+      tags: [analytics]
+      summary: Get completion rates, streaks, daily activity, and history
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: period
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [daily, weekly, monthly, yearly]
+        - name: date
+          in: query
+          required: false
+          description: Calendar date used to anchor the requested period; defaults to today.
+          schema:
+            type: string
+            format: date
+            pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+      responses:
+        "200":
+          description: Analytics for the requested period
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Analytics"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    HabitId:
+      name: habitId
+      in: path
+      required: true
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    Unauthorized:
+      description: Missing or invalid authenticated session
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
+    NotFound:
+      description: Requested resource was not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +306,287 @@ components:
           type: string
       required:
         - status
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+    Habit:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        frequency:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+            maximum: 6
+        startTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        endTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        createdAt:
+          type: string
+          format: date-time
+      required: [id, title, frequency, startTime, endTime, createdAt]
+    HabitInput:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        frequency:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 0
+            maximum: 6
+        startTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        endTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+      required: [title, frequency, startTime, endTime]
+    HabitUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        frequency:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 0
+            maximum: 6
+        startTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        endTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+    HabitLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        habitId:
+          type: integer
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [completed, missed]
+        completedAt:
+          type: ["string", "null"]
+          format: date-time
+      required: [id, habitId, date, status, completedAt]
+    HabitLogInput:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [completed, missed]
+      required: [status]
+    LegacyImportInput:
+      type: object
+      properties:
+        habits:
+          type: array
+          maxItems: 500
+          items:
+            $ref: "#/components/schemas/LegacyHabitInput"
+        preferences:
+          $ref: "#/components/schemas/LegacyPreferencesInput"
+      required: [habits]
+    LegacyHabitInput:
+      type: object
+      properties:
+        legacyId:
+          type: string
+          minLength: 1
+          maxLength: 180
+        title:
+          type: string
+          minLength: 1
+          maxLength: 120
+        frequency:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 0
+            maximum: 6
+        startTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        endTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        logs:
+          type: array
+          maxItems: 366
+          items:
+            $ref: "#/components/schemas/LegacyHabitLogInput"
+      required: [legacyId, title, startTime, endTime, logs]
+    LegacyHabitLogInput:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [completed, missed]
+      required: [date, status]
+    LegacyPreferencesInput:
+      type: object
+      properties:
+        themeMode:
+          type: string
+          enum: [light, dark]
+        themePreset:
+          type: string
+          enum: [minimalist, forest-calm, professional-slate]
+        avatarId:
+          type: string
+      additionalProperties: false
+    LegacyImportResult:
+      type: object
+      properties:
+        importedHabits:
+          type: integer
+        importedLogs:
+          type: integer
+        skippedHabits:
+          type: integer
+      required: [importedHabits, importedLogs, skippedHabits]
+    UserPreferences:
+      type: object
+      properties:
+        themeMode:
+          type: string
+          enum: [light, dark]
+        themePreset:
+          type: string
+          enum: [minimalist, forest-calm, professional-slate]
+        avatarId:
+          type: string
+      required: [themeMode, themePreset, avatarId]
+    UserPreferencesUpdate:
+      type: object
+      properties:
+        themeMode:
+          type: string
+          enum: [light, dark]
+        themePreset:
+          type: string
+          enum: [minimalist, forest-calm, professional-slate]
+        avatarId:
+          type: string
+    Avatar:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        requiredCompletions:
+          type: integer
+        completedCount:
+          type: integer
+        unlocked:
+          type: boolean
+      required:
+        [id, name, description, requiredCompletions, completedCount, unlocked]
+    Analytics:
+      type: object
+      properties:
+        period:
+          type: string
+          enum: [daily, weekly, monthly, yearly]
+        rangeStart:
+          type: string
+          format: date
+        rangeEnd:
+          type: string
+          format: date
+        completionRate:
+          type: number
+        currentStreak:
+          type: integer
+        bestStreak:
+          type: integer
+        totalCompleted:
+          type: integer
+        totalScheduled:
+          type: integer
+        dailyActivity:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailyActivity"
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/CompletionHistoryEntry"
+      required:
+        [
+          period,
+          rangeStart,
+          rangeEnd,
+          completionRate,
+          currentStreak,
+          bestStreak,
+          totalCompleted,
+          totalScheduled,
+          dailyActivity,
+          history,
+        ]
+    DailyActivity:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        scheduledCount:
+          type: integer
+        completedCount:
+          type: integer
+        completionRate:
+          type: number
+      required: [date, scheduledCount, completedCount, completionRate]
+    CompletionHistoryEntry:
+      type: object
+      properties:
+        habitId:
+          type: integer
+        habitTitle:
+          type: string
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [completed, missed]
+        completedAt:
+          type: ["string", "null"]
+          format: date-time
+      required: [habitId, habitTitle, date, status, completedAt]
 
